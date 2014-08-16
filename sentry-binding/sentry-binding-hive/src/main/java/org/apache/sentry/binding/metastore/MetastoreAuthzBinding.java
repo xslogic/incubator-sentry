@@ -32,6 +32,7 @@ import org.apache.commons.lang.StringUtils;
 import org.apache.hadoop.conf.Configuration;
 import org.apache.hadoop.hive.conf.HiveConf;
 import org.apache.hadoop.hive.metastore.MetaStorePreEventListener;
+import org.apache.hadoop.hive.metastore.api.FieldSchema;
 import org.apache.hadoop.hive.metastore.api.InvalidOperationException;
 import org.apache.hadoop.hive.metastore.api.MetaException;
 import org.apache.hadoop.hive.metastore.api.NoSuchObjectException;
@@ -59,6 +60,7 @@ import org.apache.sentry.core.model.db.DBModelAuthorizable;
 import org.apache.sentry.core.model.db.Database;
 import org.apache.sentry.core.model.db.Server;
 import org.apache.sentry.core.model.db.Table;
+import org.apache.sentry.provider.db.service.thrift.SentryPolicyServiceClient;
 
 import com.google.common.collect.ImmutableSet;
 import com.google.common.collect.Sets;
@@ -203,6 +205,9 @@ public class MetastoreAuthzBinding extends MetaStorePreEventListener {
 
   private void authorizeCreateDatabase(PreCreateDatabaseEvent context)
       throws InvalidOperationException, MetaException {
+	    // TODO : SENTRY PLUGIN
+//    sentryClient.notifyCreateDatabase(context.getDatabase().getName(),
+//    		context.getDatabase().getLocationUri());
     authorizeMetastoreAccess(HiveOperation.CREATEDATABASE,
         new HierarcyBuilder().addServerToOutput(getAuthServer()).build(),
         new HierarcyBuilder().addServerToOutput(getAuthServer()).build());
@@ -232,6 +237,10 @@ public class MetastoreAuthzBinding extends MetaStorePreEventListener {
       }
       inputBuilder.addUriToOutput(getAuthServer(), uriPath);
     }
+    // TODO : SENTRY PLUGIN
+//    sentryClient.notifyCreateTable(context.getTable().getDbName(), context
+//				.getTable().getTableName(), context.getTable().getSd()
+//				.getLocation());
     authorizeMetastoreAccess(HiveOperation.CREATETABLE, inputBuilder.build(),
         new HierarcyBuilder().addDbToOutput(
             getAuthServer(), context.getTable().getDbName()).build());
@@ -239,6 +248,9 @@ public class MetastoreAuthzBinding extends MetaStorePreEventListener {
 
   private void authorizeDropTable(PreDropTableEvent context)
       throws InvalidOperationException, MetaException {
+	    // TODO : SENTRY PLUGIN
+//    sentryClient.notifyDropTable(context.getTable().getDbName(), context
+//				.getTable().getTableName());	  
     authorizeMetastoreAccess(
         HiveOperation.DROPTABLE,
         new HierarcyBuilder().addTableToOutput(getAuthServer(),
@@ -276,6 +288,9 @@ public class MetastoreAuthzBinding extends MetaStorePreEventListener {
     if (oldLocationUri.compareTo(newLocationUri) != 0) {
       inputBuilder.addUriToOutput(getAuthServer(), newLocationUri);
       operation = HiveOperation.ALTERTABLE_LOCATION;
+	    // TODO : SENTRY PLUGIN
+//    sentryClient.notifyTableLocationChange(context.getTable().getDbName(), context
+//				.getTable().getTableName(), newLocationUri);
     }
     authorizeMetastoreAccess(
         operation,
@@ -309,6 +324,9 @@ public class MetastoreAuthzBinding extends MetaStorePreEventListener {
 	      if (!partitionLocation.startsWith(tableLocation + File.separator)) {
 	        inputBuilder.addUriToOutput(getAuthServer(), uriPath);
 	      }
+		    // TODO : SENTRY PLUGIN
+//		  sentryClient.notifyAddPartition(context.getTable().getDbName(), context
+//						.getTable().getTableName(), partitionLocation);
 	    }
 	    authorizeMetastoreAccess(HiveOperation.ALTERTABLE_ADDPARTS,
 	        inputBuilder.build(),
@@ -320,6 +338,10 @@ public class MetastoreAuthzBinding extends MetaStorePreEventListener {
 
   private void authorizeDropPartition(PreDropPartitionEvent context)
       throws InvalidOperationException, MetaException {
+	    // TODO : SENTRY PLUGIN
+//	  sentryClient.notifyDropPartition(context.getTable().getDbName(),
+//	                context.getTable().getTableName(),
+//	                context.getPartition().getSd().getLocation());
     authorizeMetastoreAccess(
         HiveOperation.ALTERTABLE_DROPPARTS,
         new HierarcyBuilder().addTableToOutput(getAuthServer(),
@@ -351,6 +373,7 @@ public class MetastoreAuthzBinding extends MetaStorePreEventListener {
       }
       inputBuilder.addUriToOutput(getAuthServer(), uriPath);
     }
+    // TODO : SENTRY PLUGIN how to deal with alter partition ?
     authorizeMetastoreAccess(
         HiveOperation.ALTERPARTITION_LOCATION,
         inputBuilder.build(),
