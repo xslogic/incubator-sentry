@@ -20,32 +20,40 @@ package org.apache.sentry.binding.metastore;
 import java.io.IOException;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.concurrent.atomic.AtomicInteger;
 
 import org.apache.hadoop.conf.Configuration;
 import org.apache.hadoop.hive.conf.HiveConf;
 import org.apache.hadoop.hive.metastore.MetaStoreEventListener;
 import org.apache.hadoop.hive.metastore.api.MetaException;
+import org.apache.hadoop.hive.metastore.api.Partition;
+import org.apache.hadoop.hive.metastore.events.AddPartitionEvent;
 import org.apache.hadoop.hive.metastore.events.AlterTableEvent;
 import org.apache.hadoop.hive.metastore.events.CreateDatabaseEvent;
 import org.apache.hadoop.hive.metastore.events.CreateTableEvent;
 import org.apache.hadoop.hive.metastore.events.DropDatabaseEvent;
+import org.apache.hadoop.hive.metastore.events.DropPartitionEvent;
 import org.apache.hadoop.hive.metastore.events.DropTableEvent;
 import org.apache.hadoop.security.UserGroupInformation;
 import org.apache.sentry.SentryUserException;
-import org.apache.sentry.binding.hive.HiveAuthzBindingHook;
 import org.apache.sentry.binding.hive.conf.HiveAuthzConf;
 import org.apache.sentry.binding.hive.conf.HiveAuthzConf.AuthzConfVars;
 import org.apache.sentry.core.common.Authorizable;
 import org.apache.sentry.core.model.db.Database;
 import org.apache.sentry.core.model.db.Server;
 import org.apache.sentry.core.model.db.Table;
+import org.apache.sentry.hdfs.HMSUpdate;
+import org.apache.sentry.hdfs.HMSUpdate.PathUpdate;
 import org.apache.sentry.provider.db.service.thrift.SentryPolicyServiceClient;
 import org.apache.sentry.service.thrift.SentryServiceClientFactory;
+import org.apache.sentry.service.thrift.ServiceConstants.ServerConfig;
 
 public class SentryMetastorePostEventListener extends MetaStoreEventListener {
   private final SentryServiceClientFactory sentryClientFactory;
   private final HiveAuthzConf authzConf;
   private final Server server;
+
+  private final AtomicInteger seqNum = new AtomicInteger(0);
 
   public SentryMetastorePostEventListener(Configuration config) {
     super(config);
@@ -57,6 +65,12 @@ public class SentryMetastorePostEventListener extends MetaStoreEventListener {
 
   @Override
   public void onCreateTable (CreateTableEvent tableEvent) throws MetaException {
+    HMSUpdate update = createHMSUpdate();
+    update.addPathUpdate(
+        tableEvent.getTable().getDbName() + "."
+            + tableEvent.getTable().getTableName()).addPath(
+                tableEvent.getTable().getSd().getLocation());
+    notifySentry(update);
     // drop the privileges on the given table, in case if anything was left
     // behind during the drop
     if (!syncWithPolicyStore(AuthzConfVars.AUTHZ_SYNC_CREATE_WITH_POLICY_STORE)) {
@@ -68,6 +82,11 @@ public class SentryMetastorePostEventListener extends MetaStoreEventListener {
 
   @Override
   public void onDropTable(DropTableEvent tableEvent) throws MetaException {
+    HMSUpdate update = createHMSUpdate();
+    update.addPathUpdate(
+        tableEvent.getTable().getDbName() + "."
+            + tableEvent.getTable().getTableName()).delPath(HMSUpdate.ALL_PATHS);
+    notifySentry(update);
     // drop the privileges on the given table
     if (!syncWithPolicyStore(AuthzConfVars.AUTHZ_SYNC_DROP_WITH_POLICY_STORE)) {
       return;
@@ -79,6 +98,10 @@ public class SentryMetastorePostEventListener extends MetaStoreEventListener {
   @Override
   public void onCreateDatabase(CreateDatabaseEvent dbEvent)
       throws MetaException {
+    HMSUpdate update = createHMSUpdate();
+    update.addPathUpdate(dbEvent.getDatabase().getName()).addPath(
+        dbEvent.getDatabase().getLocationUri());
+    notifySentry(update);
     // drop the privileges on the database, incase anything left behind during
     // last drop db
     if (!syncWithPolicyStore(AuthzConfVars.AUTHZ_SYNC_CREATE_WITH_POLICY_STORE)) {
@@ -94,10 +117,14 @@ public class SentryMetastorePostEventListener extends MetaStoreEventListener {
    */
   @Override
   public void onDropDatabase(DropDatabaseEvent dbEvent) throws MetaException {
+    HMSUpdate update = createHMSUpdate();
+    update.addPathUpdate(dbEvent.getDatabase().getName()).delPath(
+        HMSUpdate.ALL_PATHS);
+    notifySentry(update);
+    dropSentryDbPrivileges(dbEvent.getDatabase().getName());
     if (!syncWithPolicyStore(AuthzConfVars.AUTHZ_SYNC_DROP_WITH_POLICY_STORE)) {
       return;
     }
-    dropSentryDbPrivileges(dbEvent.getDatabase().getName());
   }
 
   /**
@@ -106,6 +133,7 @@ public class SentryMetastorePostEventListener extends MetaStoreEventListener {
   @Override
   public void onAlterTable (AlterTableEvent tableEvent) throws MetaException {
     String oldTableName = null, newTableName = null;
+    // TODO : notify SentryHMSPathCache
     if (!syncWithPolicyStore(AuthzConfVars.AUTHZ_SYNC_ALTER_WITH_POLICY_STORE)) {
       return;
     }
@@ -119,6 +147,36 @@ public class SentryMetastorePostEventListener extends MetaStoreEventListener {
       renameSentryTablePrivilege(tableEvent.getOldTable().getDbName(),
           oldTableName, tableEvent.getNewTable().getDbName(), newTableName);
     }
+  }
+
+  
+
+  @Override
+  public void onAddPartition(AddPartitionEvent partitionEvent)
+      throws MetaException {
+    HMSUpdate update = createHMSUpdate();
+    PathUpdate pathUpdate = update.addPathUpdate(
+        partitionEvent.getTable().getDbName() + "."
+            + partitionEvent.getTable().getTableName());
+    for (Partition part : partitionEvent.getPartitions()) {
+      pathUpdate.addPath(part.getSd().getLocation());
+    }
+    notifySentry(update);
+    // TODO Auto-generated method stub
+    super.onAddPartition(partitionEvent);
+  }
+
+  @Override
+  public void onDropPartition(DropPartitionEvent partitionEvent)
+      throws MetaException {
+    HMSUpdate update = createHMSUpdate();
+    update.addPathUpdate(
+        partitionEvent.getTable().getDbName() + "."
+            + partitionEvent.getTable().getTableName()).delPath(
+        partitionEvent.getPartition().getSd().getLocation());
+    notifySentry(update);
+    // TODO Auto-generated method stub
+    super.onDropPartition(partitionEvent);
   }
 
   private SentryPolicyServiceClient getSentryServiceClient()
@@ -201,8 +259,25 @@ public class SentryMetastorePostEventListener extends MetaStoreEventListener {
     }
   }
 
+  private void notifySentry(HMSUpdate update) throws MetaException {
+    if (!authzConf.getBoolean(ServerConfig.SENTRY_HMS_PATH_CACHE_ENABLE, true)) {
+      return;
+    }
+    try {
+      getSentryServiceClient().notifyHMSUpdate(update);
+    } catch (SentryUserException e) {
+      throw new MetaException("Error sending update to Sentry [" + e.getMessage() + "]");
+    }
+  }
+
   private boolean syncWithPolicyStore(AuthzConfVars syncConfVar) {
     return "true"
         .equalsIgnoreCase((authzConf.get(syncConfVar.getVar(), "true")));
   }
+
+  private HMSUpdate createHMSUpdate() {
+    HMSUpdate update = new HMSUpdate(seqNum.incrementAndGet(), null);
+    return update;
+  }
+
 }
