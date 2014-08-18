@@ -22,7 +22,6 @@ import java.io.IOException;
 import java.net.InetSocketAddress;
 import java.security.PrivilegedExceptionAction;
 import java.util.HashSet;
-import java.util.LinkedList;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
@@ -40,7 +39,6 @@ import org.apache.sentry.core.common.ActiveRoleSet;
 import org.apache.sentry.core.common.Authorizable;
 import org.apache.sentry.core.model.db.AccessConstants;
 import org.apache.sentry.core.model.db.DBModelAuthorizable;
-import org.apache.sentry.provider.db.service.cache.HMSUpdate;
 import org.apache.sentry.service.thrift.ServiceConstants.ClientConfig;
 import org.apache.sentry.service.thrift.ServiceConstants.PrivilegeScope;
 import org.apache.sentry.service.thrift.ServiceConstants.ServerConfig;
@@ -569,29 +567,6 @@ TSENTRY_SERVICE_VERSION_CURRENT, requestorUserName,
     } catch (TException e) {
       throw new SentryUserException(THRIFT_EXCEPTION_MESSAGE, e);
     }
-  }
-
-  public synchronized void notifyHMSUpdate(HMSUpdate update)
-      throws SentryUserException {
-    try {
-      client.handle_hms_notification(HMSUpdate.toJsonString(update));
-    } catch (Exception e) {
-      throw new SentryUserException(THRIFT_EXCEPTION_MESSAGE, e);
-    }
-  }
-
-  public synchronized List<HMSUpdate> getAllHMSUpdatesFrom(int seqNum)
-      throws SentryUserException{
-    List<HMSUpdate> retVal = new LinkedList<HMSUpdate>();
-    try {
-      List<String> updatesStr= client.get_all_hms_updates_from(seqNum);
-      for (String updateStr : updatesStr) {
-        retVal.add(HMSUpdate.fromJsonString(updateStr));
-      }
-    } catch (Exception e) {
-      throw new SentryUserException(THRIFT_EXCEPTION_MESSAGE, e);
-    }
-    return retVal;
   }
 
   public void close() {

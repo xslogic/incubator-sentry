@@ -18,19 +18,13 @@
 
 package org.apache.sentry.provider.db.service.thrift;
 
-import java.io.IOException;
 import java.lang.reflect.Constructor;
 import java.lang.reflect.InvocationTargetException;
-import java.util.HashMap;
 import java.util.HashSet;
-import java.util.LinkedList;
 import java.util.List;
-import java.util.Map;
 import java.util.Set;
 
 import org.apache.hadoop.conf.Configuration;
-import org.apache.hadoop.hive.conf.HiveConf;
-import org.apache.hadoop.hive.metastore.HiveMetaStoreClient;
 import org.apache.sentry.SentryUserException;
 import org.apache.sentry.core.model.db.AccessConstants;
 import org.apache.sentry.provider.common.GroupMappingService;
@@ -40,10 +34,6 @@ import org.apache.sentry.provider.db.SentryInvalidInputException;
 import org.apache.sentry.provider.db.SentryNoSuchObjectException;
 import org.apache.sentry.provider.db.log.entity.JsonLogEntityFactory;
 import org.apache.sentry.provider.db.log.util.Constants;
-import org.apache.sentry.provider.db.service.cache.ExtendedMetastoreClient;
-import org.apache.sentry.provider.db.service.cache.HMSPathCache;
-import org.apache.sentry.provider.db.service.cache.HMSUpdate;
-import org.apache.sentry.provider.db.service.cache.MetastoreClient;
 import org.apache.sentry.provider.db.service.persistent.CommitContext;
 import org.apache.sentry.provider.db.service.persistent.SentryStore;
 import org.apache.sentry.provider.db.service.thrift.PolicyStoreConstants.PolicyStoreServerConfig;
@@ -75,8 +65,6 @@ public class SentryPolicyStoreProcessor implements SentryPolicyService.Iface {
   private final ImmutableSet<String> adminGroups;
   private boolean isReady;
 
-  private final HMSPathCache hmsPathCache;
-
   public SentryPolicyStoreProcessor(String name, Configuration conf) throws Exception {
     super();
     this.name = name;
@@ -88,14 +76,6 @@ public class SentryPolicyStoreProcessor implements SentryPolicyService.Iface {
     isReady = true;
     adminGroups = ImmutableSet.copyOf(toTrimedLower(Sets.newHashSet(conf.getStrings(
         ServerConfig.ADMIN_GROUPS, new String[]{}))));
-    HiveConf hiveConf = new HiveConf(conf, Configuration.class);
-    if (conf.getBoolean(ServerConfig.SENTRY_HMS_PATH_CACHE_ENABLE, true)) {
-      MetastoreClient hmsClient = new ExtendedMetastoreClient(new HiveMetaStoreClient(hiveConf));
-      hmsPathCache = new HMSPathCache(hmsClient, conf.getLong(
-          ServerConfig.SENTRY_HMS_PATH_CACHE_EXPIRY_MS, 100000), 100, "/");
-    } else {
-      hmsPathCache = null; 
-    }
   }
 
   public void stop() {
@@ -535,48 +515,4 @@ public class SentryPolicyStoreProcessor implements SentryPolicyService.Iface {
     return response;
   }
 
-  @Override
-  public void handle_hms_notification(String hmsUpdateStr) throws TException {
-    if (hmsPathCache == null) {
-      throw new TException("HiveMetastore Path Cache not enabled !!");
-    }
-    try {
-      HMSUpdate hmsUpdate = HMSUpdate.fromJsonString(hmsUpdateStr);
-      hmsPathCache.handleHMSNotification(hmsUpdate);
-    } catch (IOException e) {
-      LOGGER.error("Error handling notification from HMS", e);
-      throw new TException(e);
-    }
-  }
-
-  @Override
-  public List<String> get_all_hms_updates_from(int seqNum) throws TException {
-    if (hmsPathCache == null) {
-      throw new TException("HiveMetastore Path Cache not enabled !!");
-    }
-    List<HMSUpdate> updates = hmsPathCache.getAllUpdatesFrom(seqNum);
-    List<String> retVal = new LinkedList<String>();
-    try {
-      for (HMSUpdate update : updates) {
-        retVal.add(HMSUpdate.toJsonString(update));
-      }
-    } catch (IOException e) {
-      LOGGER.error("Error Sending updates to downstream Cache", e);
-      throw new TException(e);
-    }
-    return retVal;
-  }
-
-  @Override
-  public Map<String, List<String>> get_all_related_paths(String path,
-      boolean exactMatch) throws TException {
-    if (hmsPathCache == null) {
-      throw new TException("HiveMetastore Path Cache not enabled !!");
-    }
-    Map<String, LinkedList<String>> relatedPaths = hmsPathCache
-        .getAllRelatedPaths(path, exactMatch);
-    return new HashMap<String, List<String>>(relatedPaths);
-  }
-
-  
 }

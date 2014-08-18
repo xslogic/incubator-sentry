@@ -97,9 +97,6 @@ public class ServiceConstants {
     public static final String SENTRY_STORE_HADOOP_GROUP_MAPPING = "org.apache.sentry.provider.common.HadoopGroupMappingService";
     public static final String SENTRY_STORE_LOCAL_GROUP_MAPPING = "org.apache.sentry.provider.file.LocalGroupMappingService";
     public static final String SENTRY_STORE_GROUP_MAPPING_DEFAULT = SENTRY_STORE_HADOOP_GROUP_MAPPING;
-    
-    public static final String SENTRY_HMS_PATH_CACHE_ENABLE = "sentry.hms.path.cache.enable";
-    public static final String SENTRY_HMS_PATH_CACHE_EXPIRY_MS = "sentry.hms.path.cache.expiry.ms";
 
     public static final ImmutableMap<String, String> SENTRY_STORE_DEFAULTS =
         ImmutableMap.<String, String>builder()
