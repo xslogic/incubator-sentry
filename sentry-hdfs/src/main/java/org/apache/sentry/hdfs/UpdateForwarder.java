@@ -22,17 +22,17 @@ import java.util.LinkedList;
 import java.util.List;
 import java.util.concurrent.Executor;
 import java.util.concurrent.Executors;
-import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.atomic.AtomicLong;
 
 public abstract class UpdateForwarder<K extends UpdateForwarder.Update> {
 
   public interface Update {
     boolean hasFullImage();
-    int getSeqNum();
+    long getSeqNum();
   }
 
-  private final AtomicInteger lastSeenSeqNum = new AtomicInteger(0);
-  private final AtomicInteger lastCommittedSeqNum = new AtomicInteger(0);
+  private final AtomicLong lastSeenSeqNum = new AtomicLong(0);
+  private final AtomicLong lastCommittedSeqNum = new AtomicLong(0);
   // Updates should be handled in order
   private final Executor updateHandler = Executors.newSingleThreadExecutor();
 
@@ -105,9 +105,9 @@ public abstract class UpdateForwarder<K extends UpdateForwarder.Update> {
    * @param seqNum
    * @return
    */
-  public List<K> getAllUpdatesFrom(int seqNum) {
+  public List<K> getAllUpdatesFrom(long seqNum) {
     List<K> retVal = new LinkedList<K>();
-    int currSeqNum = lastCommittedSeqNum.get();
+    long currSeqNum = lastCommittedSeqNum.get();
     if ((updateLogSize == 0) || (seqNum > currSeqNum)) {
       // If cache not configured with an updateLog
       // or if caller already has latest updates
@@ -147,7 +147,7 @@ public abstract class UpdateForwarder<K extends UpdateForwarder.Update> {
         }
         // add all updates from requestedSeq
         // to committedSeqNum
-        for (int seq = seqNum; seq <= currSeqNum; seq ++) {
+        for (long seq = seqNum; seq <= currSeqNum; seq ++) {
           retVal.add(u);
           if (iter.hasNext()) {
             u = iter.next();
@@ -164,13 +164,13 @@ public abstract class UpdateForwarder<K extends UpdateForwarder.Update> {
     return lastCommittedSeqNum.get() == lastSeenSeqNum.get();
   }
 
-  int getLastCommitted() {
+  long getLastCommitted() {
     return lastCommittedSeqNum.get();
   }
 
-  protected abstract K createFullImageUpdate(int currSeqNum);
+  protected abstract K createFullImageUpdate(long currSeqNum);
 
-  protected abstract K retrieveFullImageFromSourceAndApply(int currSeqNum);
+  protected abstract K retrieveFullImageFromSourceAndApply(long currSeqNum);
 
   protected abstract void applyFullImageUpdate(K update);
 

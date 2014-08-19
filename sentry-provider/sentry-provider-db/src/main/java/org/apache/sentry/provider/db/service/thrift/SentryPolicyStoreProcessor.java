@@ -27,12 +27,15 @@ import java.util.LinkedList;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
+import java.util.concurrent.atomic.AtomicInteger;
 
 import org.apache.hadoop.conf.Configuration;
 import org.apache.hadoop.hive.conf.HiveConf;
 import org.apache.hadoop.hive.metastore.HiveMetaStoreClient;
 import org.apache.sentry.SentryUserException;
 import org.apache.sentry.core.model.db.AccessConstants;
+import org.apache.sentry.hdfs.AuthzCache;
+import org.apache.sentry.hdfs.AuthzUpdate;
 import org.apache.sentry.hdfs.ExtendedMetastoreClient;
 import org.apache.sentry.hdfs.HMSPathCache;
 import org.apache.sentry.hdfs.HMSUpdate;
@@ -76,6 +79,8 @@ public class SentryPolicyStoreProcessor implements SentryPolicyService.Iface {
   private boolean isReady;
 
   private final HMSPathCache hmsPathCache;
+  private final AuthzCache authzCache;
+  private final AtomicInteger authzSeqNum = new AtomicInteger(0);
 
   public SentryPolicyStoreProcessor(String name, Configuration conf) throws Exception {
     super();
@@ -89,12 +94,15 @@ public class SentryPolicyStoreProcessor implements SentryPolicyService.Iface {
     adminGroups = ImmutableSet.copyOf(toTrimedLower(Sets.newHashSet(conf.getStrings(
         ServerConfig.ADMIN_GROUPS, new String[]{}))));
     HiveConf hiveConf = new HiveConf(conf, Configuration.class);
-    if (conf.getBoolean(ServerConfig.SENTRY_HMS_PATH_CACHE_ENABLE, true)) {
+    if (conf.getBoolean(ServerConfig.SENTRY_HDFS_INTEGRATION_ENABLE, true)) {
       MetastoreClient hmsClient = new ExtendedMetastoreClient(new HiveMetaStoreClient(hiveConf));
       hmsPathCache = new HMSPathCache(hmsClient, conf.getLong(
           ServerConfig.SENTRY_HMS_PATH_CACHE_EXPIRY_MS, 100000), 100, "/");
+      authzCache = new AuthzCache(conf.getLong(
+          ServerConfig.SENTRY_AUTHZ_CACHE_EXPIRY_MS, 100000), sentryStore, 100);
     } else {
-      hmsPathCache = null; 
+      hmsPathCache = null;
+      authzCache = null;
     }
   }
 
@@ -198,6 +206,15 @@ public class SentryPolicyStoreProcessor implements SentryPolicyService.Iface {
       response.setStatus(Status.OK());
       notificationHandlerInvoker.alter_sentry_role_grant_privilege(commitContext,
           request, response);
+      String authzObj = getAuthzObj(request.getPrivilege());
+      if (authzObj != null) {
+        AuthzUpdate update = new AuthzUpdate(authzSeqNum.incrementAndGet(), false);
+        update.addPrivilegeUpdate(authzObj).addPrivilege(
+            request.getRoleName(),
+            SentryStore.ACTION_MAPPING.get(request.getPrivilege().getAction())
+                .toString());
+        authzCache.handleUpdateNotification(update);
+      }
     } catch (SentryNoSuchObjectException e) {
       String msg = "Role: " + request.getRoleName() + " doesn't exist.";
       LOGGER.error(msg, e);
@@ -230,6 +247,15 @@ public class SentryPolicyStoreProcessor implements SentryPolicyService.Iface {
       response.setStatus(Status.OK());
       notificationHandlerInvoker.alter_sentry_role_revoke_privilege(commitContext,
           request, response);
+      String authzObj = getAuthzObj(request.getPrivilege());
+      if (authzObj != null) {
+        AuthzUpdate update = new AuthzUpdate(authzSeqNum.incrementAndGet(), false);
+        update.addPrivilegeUpdate(authzObj).delPrivilege(
+            request.getRoleName(),
+            SentryStore.ACTION_MAPPING.get(request.getPrivilege().getAction())
+                .toString());
+        authzCache.handleUpdateNotification(update);
+      }
     } catch (SentryNoSuchObjectException e) {
       String msg = "Privilege: [server=" + request.getPrivilege().getServerName() +
     		  ",db=" + request.getPrivilege().getDbName() +
@@ -268,6 +294,11 @@ public class SentryPolicyStoreProcessor implements SentryPolicyService.Iface {
       response.setStatus(Status.OK());
       notificationHandlerInvoker.drop_sentry_role(commitContext,
           request, response);
+      AuthzUpdate update = new AuthzUpdate(authzSeqNum.incrementAndGet(), false);
+      update.addPrivilegeUpdate(AuthzUpdate.ALL_AUTHZ_OBJ).delPrivilege(
+          request.getRoleName(), AuthzUpdate.ALL_AUTHZ_OBJ);
+      update.addRoleUpdate(AuthzUpdate.ALL_GROUPS).delRole(request.getRoleName());
+      authzCache.handleUpdateNotification(update);
     } catch (SentryNoSuchObjectException e) {
       String msg = "Role :" + request + " does not exist.";
       LOGGER.error(msg, e);
@@ -298,6 +329,11 @@ public class SentryPolicyStoreProcessor implements SentryPolicyService.Iface {
       response.setStatus(Status.OK());
       notificationHandlerInvoker.alter_sentry_role_add_groups(commitContext,
           request, response);
+      AuthzUpdate update = new AuthzUpdate(authzSeqNum.incrementAndGet(), false);
+      for (TSentryGroup group : request.getGroups()) {
+        update.addRoleUpdate(group.getGroupName()).addRole(request.getRoleName());
+      }
+      authzCache.handleUpdateNotification(update);
     } catch (SentryNoSuchObjectException e) {
       String msg = "Role: " + request + " does not exist.";
       LOGGER.error(msg, e);
@@ -328,6 +364,11 @@ public class SentryPolicyStoreProcessor implements SentryPolicyService.Iface {
       response.setStatus(Status.OK());
       notificationHandlerInvoker.alter_sentry_role_delete_groups(commitContext,
           request, response);
+      AuthzUpdate update = new AuthzUpdate(authzSeqNum.incrementAndGet(), false);
+      for (TSentryGroup group : request.getGroups()) {
+        update.addRoleUpdate(group.getGroupName()).delRole(request.getRoleName());
+      }
+      authzCache.handleUpdateNotification(update);
     } catch (SentryNoSuchObjectException e) {
       String msg = "Role: " + request + " does not exist.";
       LOGGER.error(msg, e);
@@ -502,6 +543,7 @@ public class SentryPolicyStoreProcessor implements SentryPolicyService.Iface {
       authorize(request.getRequestorUserName(), adminGroups);
       sentryStore.dropPrivilege(request.getAuthorizable());
       response.setStatus(Status.OK());
+      // TODO : Sentry - HDFS : Have to handle this 
     } catch (SentryAccessDeniedException e) {
       LOGGER.error(e.getMessage(), e);
       response.setStatus(Status.AccessDenied(e.getMessage(), e));
@@ -523,6 +565,7 @@ public class SentryPolicyStoreProcessor implements SentryPolicyService.Iface {
       sentryStore.renamePrivilege(request.getOldAuthorizable(),
           request.getNewAuthorizable(), request.getRequestorUserName());
       response.setStatus(Status.OK());
+      // TODO : Sentry - HDFS : Have to handle this
     } catch (SentryAccessDeniedException e) {
       LOGGER.error(e.getMessage(), e);
       response.setStatus(Status.AccessDenied(e.getMessage(), e));
@@ -550,7 +593,7 @@ public class SentryPolicyStoreProcessor implements SentryPolicyService.Iface {
   }
 
   @Override
-  public List<String> get_all_hms_updates_from(int seqNum) throws TException {
+  public List<String> get_all_hms_updates_from(long seqNum) throws TException {
     if (hmsPathCache == null) {
       throw new TException("HiveMetastore Path Cache not enabled !!");
     }
@@ -559,6 +602,24 @@ public class SentryPolicyStoreProcessor implements SentryPolicyService.Iface {
     try {
       for (HMSUpdate update : updates) {
         retVal.add(HMSUpdate.toJsonString(update));
+      }
+    } catch (IOException e) {
+      LOGGER.error("Error Sending updates to downstream Cache", e);
+      throw new TException(e);
+    }
+    return retVal;
+  }
+
+  @Override
+  public List<String> get_all_authz_updates_from(long seqNum) throws TException {
+    if (hmsPathCache == null) {
+      throw new TException("HiveMetastore Path Cache not enabled !!");
+    }
+    List<AuthzUpdate> updates = authzCache.getAllUpdatesFrom(seqNum);
+    List<String> retVal = new LinkedList<String>();
+    try {
+      for (AuthzUpdate update : updates) {
+        retVal.add(AuthzUpdate.toJsonString(update));
       }
     } catch (IOException e) {
       LOGGER.error("Error Sending updates to downstream Cache", e);
@@ -578,5 +639,18 @@ public class SentryPolicyStoreProcessor implements SentryPolicyService.Iface {
     return new HashMap<String, List<String>>(relatedPaths);
   }
 
-  
+  private String getAuthzObj(TSentryPrivilege privilege) {
+    String authzObj = null;
+    if (!SentryStore.isNULL(privilege.getDbName())) {
+      String dbName = privilege.getDbName();
+      String tblName = privilege.getTableName();
+      if (tblName == null) {
+        authzObj = dbName;
+      } else {
+        authzObj = dbName + "." + tblName;
+      }
+    }
+    return authzObj;
+  }
+
 }

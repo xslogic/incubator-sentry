@@ -56,11 +56,11 @@ public class HMSUpdate implements UpdateForwarder.Update {
     
   }
 
-  private final int seqNum;
+  private final long seqNum;
   private final boolean hasFullImage;
   private final String pathDump;
   private final List<PathUpdate> pathUpdates = new LinkedList<PathUpdate>();
-  public HMSUpdate(int seqNum, String pathDump) {
+  public HMSUpdate(long seqNum, String pathDump) {
     this.seqNum = seqNum;
     this.pathDump = pathDump;
     this.hasFullImage = (pathDump != null);
@@ -83,7 +83,7 @@ public class HMSUpdate implements UpdateForwarder.Update {
   }
 
   @Override
-  public int getSeqNum() {
+  public long getSeqNum() {
     return seqNum;
   }
   public String getPathDump() {

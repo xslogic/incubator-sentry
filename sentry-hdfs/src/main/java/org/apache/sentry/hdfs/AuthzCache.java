@@ -33,45 +33,56 @@ import com.google.common.cache.LoadingCache;
 
 public class AuthzCache extends UpdateForwarder<AuthzUpdate>{
 
-  static class PrivilegeInfo {
+  public static class PrivilegeInfo {
     private final String authzObj;
-    private final Map<String, FsAction> roleToPermission = new HashMap<String, FsAction>();
-    PrivilegeInfo(String authzObj) {
+    final Map<String, FsAction> roleToPermission = new HashMap<String, FsAction>();
+    public PrivilegeInfo(String authzObj) {
       this.authzObj = authzObj;
     }
-    PrivilegeInfo setPermission(String role, FsAction perm) {
+    public PrivilegeInfo setPermission(String role, FsAction perm) {
       roleToPermission.put(role, perm);
       return this;
     }
-    PrivilegeInfo removePermission(String role) {
+    public PrivilegeInfo removePermission(String role) {
       roleToPermission.remove(role);
       return this;
     }
-    FsAction getPermission(String role) {
+    public FsAction getPermission(String role) {
       return roleToPermission.get(role);
+    }
+    public String getAuthzObj() {
+      return authzObj;
     }
   }
 
-  static class RoleInfo {
+  public static class RoleInfo {
     private final String group;
-    private final Set<String> roles = new HashSet<String>();
+    final Set<String> roles = new HashSet<String>();
     public RoleInfo(String group) {
       this.group = group;
     }
-    RoleInfo addRole(String role) {
-      roles.add(group);
+    public RoleInfo addRole(String role) {
+      roles.add(role);
       return this;
     }
-    RoleInfo delRole(String role) {
-      roles.remove(group);
+    public RoleInfo delRole(String role) {
+      roles.remove(role);
       return this;
     }
+    public String getGroup() {
+      return group;
+    }
+    
   }
 
   public interface AuthzSource {
+
     public PrivilegeInfo loadPrivilege(String authzObj) throws Exception;
-    public RoleInfo loadRole(String role) throws Exception;
-    public AuthzUpdate createFullImage(int seqNum);
+
+    public RoleInfo loadRolesForGroup(String group) throws Exception;
+
+    public AuthzUpdate createFullImage(long seqNum);
+
   }
 
   private final LoadingCache<String, PrivilegeInfo> privilegeCache;
@@ -95,7 +106,7 @@ public class AuthzCache extends UpdateForwarder<AuthzUpdate>{
         .build(new CacheLoader<String, RoleInfo>() {
           @Override
           public RoleInfo load(String key) throws Exception {
-            return source.loadRole(key);
+            return source.loadRolesForGroup(key);
           }
         });
   }
@@ -121,7 +132,7 @@ public class AuthzCache extends UpdateForwarder<AuthzUpdate>{
   
 
   @Override
-  protected AuthzUpdate retrieveFullImageFromSourceAndApply(int currSeqNum) {
+  protected AuthzUpdate retrieveFullImageFromSourceAndApply(long currSeqNum) {
     AuthzUpdate fullImage = source.createFullImage(currSeqNum);
     applyFullImageUpdate(fullImage);
     return fullImage;
@@ -137,14 +148,14 @@ public class AuthzCache extends UpdateForwarder<AuthzUpdate>{
   }
 
   @Override
-  protected AuthzUpdate createFullImageUpdate(int currSeqNum) {
+  protected AuthzUpdate createFullImageUpdate(long currSeqNum) {
     AuthzUpdate retVal = new AuthzUpdate(currSeqNum, true);
     for (Map.Entry<String, PrivilegeInfo> pE : privilegeCache.asMap()
         .entrySet()) {
       PrivilegeUpdate pUpdate = retVal.addPrivilegeUpdate(pE.getKey());
       PrivilegeInfo pInfo = pE.getValue();
       for (Map.Entry<String, FsAction> ent : pInfo.roleToPermission.entrySet()) {
-        pUpdate.addPrivilege(ent.getKey(), ent.getValue().toString());
+        pUpdate.addPrivilege(ent.getKey(), ent.getValue().SYMBOL);
       }
     }
     for (Map.Entry<String, RoleInfo> rE : roleCache.asMap().entrySet()) {
@@ -159,9 +170,53 @@ public class AuthzCache extends UpdateForwarder<AuthzUpdate>{
 
   @Override
   protected void applyPartialUpdate(AuthzUpdate update) {
+    applyPrivilegeUpdates(update);
+    applyGroupUpdates(update);
+  }
+
+  private void applyGroupUpdates(AuthzUpdate update) {
+    for(RoleUpdate rUpdate : update.getRoleUpdates()) {
+      // Don't use the cache.get() method here.. don't want to
+      // call the loader
+      if (rUpdate.getGroup().equals(AuthzUpdate.ALL_GROUPS)) {
+        // Request to remove role from all groups
+        String roleToRemove = rUpdate.getDelRoles().get(0);
+        for (RoleInfo rInfo : roleCache.asMap().values()) {
+          rInfo.delRole(roleToRemove);
+        }
+      } else {
+        RoleInfo rInfo = roleCache.getIfPresent(rUpdate.getGroup());
+        if (rInfo == null) {
+          rInfo = new RoleInfo(rUpdate.getGroup());
+          roleCache.put(rUpdate.getGroup(), rInfo);
+        }
+        for (String role : rUpdate.getAddRoles()) {
+          rInfo.addRole(role);
+        }
+        for (String role : rUpdate.getDelRoles()) {
+          if (role.equals(AuthzUpdate.ALL_ROLES)) {
+            // Remove all roles
+            roleCache.invalidate(rUpdate.getGroup());
+            break;
+          }
+          rInfo.delRole(role);
+        }
+      }
+    }
+  }
+
+  private void applyPrivilegeUpdates(AuthzUpdate update) {
     for (PrivilegeUpdate pUpdate : update.getPrivilegeUpdates()) {
       // Don't use the cache.get() method here.. don't want to
       // call the loader
+      if (pUpdate.getAuthzObj().equals(AuthzUpdate.ALL_PRIVS)) {
+        // Request to remove role from all Privileges
+        String roleToRemove = pUpdate.getDelPrivileges().keySet().iterator()
+            .next();
+        for (PrivilegeInfo pInfo : privilegeCache.asMap().values()) {
+          pInfo.removePermission(roleToRemove);
+        }
+      }
       PrivilegeInfo pInfo = privilegeCache.getIfPresent(pUpdate.getAuthzObj());
       if (pInfo == null) {
         pInfo = new PrivilegeInfo(pUpdate.getAuthzObj());
@@ -176,7 +231,7 @@ public class AuthzCache extends UpdateForwarder<AuthzUpdate>{
         }
         pInfo.setPermission(aMap.getKey(), fsAction);
       }
-      for (Map.Entry<String, String> dMap : pUpdate.getAddPrivileges().entrySet()) {
+      for (Map.Entry<String, String> dMap : pUpdate.getDelPrivileges().entrySet()) {
         if (dMap.getKey().equals(AuthzUpdate.ALL_PRIVS)) {
           // Remove all privileges
           privilegeCache.invalidate(pUpdate.getAuthzObj());
@@ -191,26 +246,6 @@ public class AuthzCache extends UpdateForwarder<AuthzUpdate>{
             pInfo.setPermission(dMap.getKey(), fsAction);
           }
         }
-      }
-    }
-    for(RoleUpdate rUpdate : update.getRoleUpdates()) {
-      // Don't use the cache.get() method here.. don't want to
-      // call the loader
-      RoleInfo rInfo = roleCache.getIfPresent(rUpdate.getGroup());
-      if (rInfo == null) {
-        rInfo = new RoleInfo(rUpdate.getGroup());
-        roleCache.put(rUpdate.getGroup(), rInfo);
-      }
-      for (String role : rUpdate.getAddRoles()) {
-        rInfo.addRole(role);
-      }
-      for (String role : rUpdate.getDelRoles()) {
-        if (role.equals(AuthzUpdate.ALL_ROLES)) {
-          // Remove all roles
-          roleCache.invalidate(rUpdate.getGroup());
-          break;
-        }
-        rInfo.delRole(role);
       }
     }
   }

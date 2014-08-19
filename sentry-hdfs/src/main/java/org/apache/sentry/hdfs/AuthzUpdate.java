@@ -18,10 +18,13 @@
 package org.apache.sentry.hdfs;
 
 import java.io.IOException;
+import java.util.Collection;
 import java.util.HashMap;
+import java.util.HashSet;
 import java.util.LinkedList;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 
 import org.codehaus.jackson.map.ObjectMapper;
 
@@ -38,9 +41,15 @@ public class AuthzUpdate implements UpdateForwarder.Update {
       addPrivileges.put(role, action);
       return this;
     }
+    public String getAddPrivilege(String role) {
+      return addPrivileges.get(role);
+    }
     public PrivilegeUpdate delPrivilege(String role, String action) {
       delPrivileges.put(role, action);
       return this;
+    }
+    public String getDelPrivilege(String role) {
+      return delPrivileges.get(role);
     }
     public String getAuthzObj() {
       return authzObj;
@@ -51,7 +60,29 @@ public class AuthzUpdate implements UpdateForwarder.Update {
     public Map<String, String> getDelPrivileges() {
       return delPrivileges;
     }
-    
+    @Override
+    public int hashCode() {
+      final int prime = 31;
+      int result = 1;
+      result = prime * result + ((authzObj == null) ? 0 : authzObj.hashCode());
+      return result;
+    }
+    @Override
+    public boolean equals(Object obj) {
+      if (this == obj)
+        return true;
+      if (obj == null)
+        return false;
+      if (getClass() != obj.getClass())
+        return false;
+      PrivilegeUpdate other = (PrivilegeUpdate) obj;
+      if (authzObj == null) {
+        if (other.authzObj != null)
+          return false;
+      } else if (!authzObj.equals(other.authzObj))
+        return false;
+      return true;
+    }
   }
 
   public static class RoleUpdate {
@@ -78,23 +109,47 @@ public class AuthzUpdate implements UpdateForwarder.Update {
     public List<String> getDelRoles() {
       return delRoles;
     }
-    
+    @Override
+    public int hashCode() {
+      final int prime = 31;
+      int result = 1;
+      result = prime * result + ((group == null) ? 0 : group.hashCode());
+      return result;
+    }
+    @Override
+    public boolean equals(Object obj) {
+      if (this == obj)
+        return true;
+      if (obj == null)
+        return false;
+      if (getClass() != obj.getClass())
+        return false;
+      RoleUpdate other = (RoleUpdate) obj;
+      if (group == null) {
+        if (other.group != null)
+          return false;
+      } else if (!group.equals(other.group))
+        return false;
+      return true;
+    }
   }
 
+  public static String ALL_AUTHZ_OBJ = "__ALL_AUTHZ_OBJ__";
   public static String ALL_PRIVS = "__ALL_PRIVS__";
   public static String ALL_ROLES = "__ALL_ROLES__";
+  public static String ALL_GROUPS = "__ALL_GROUPS__";
 
-  private final int seqNum;
+  private final long seqNum;
   private final boolean hasFullImage;
-  private final List<RoleUpdate> roleUpdates = new LinkedList<RoleUpdate>();
-  private final List<PrivilegeUpdate> privilegeUpdates = new LinkedList<PrivilegeUpdate>();
-  public AuthzUpdate(int seqNum, boolean hasFullImage) {
+  private final Map<String, RoleUpdate> roleUpdates = new HashMap<String, RoleUpdate>();
+  private final Map<String, PrivilegeUpdate> privilegeUpdates = new HashMap<String, PrivilegeUpdate>();
+  public AuthzUpdate(long seqNum, boolean hasFullImage) {
     this.seqNum = seqNum;
     this.hasFullImage = hasFullImage;
   }
 
   @Override
-  public int getSeqNum() {
+  public long getSeqNum() {
     return seqNum;
   }
 
@@ -104,26 +159,26 @@ public class AuthzUpdate implements UpdateForwarder.Update {
   }
 
   public PrivilegeUpdate addPrivilegeUpdate(String authzObj) {
-    if (!hasFullImage) {
-      PrivilegeUpdate privUpdate = new PrivilegeUpdate(authzObj);
-      privilegeUpdates.add(privUpdate);
-      return privUpdate;
+    PrivilegeUpdate privUpdate = new PrivilegeUpdate(authzObj);
+    if (privilegeUpdates.containsKey(authzObj)) {
+      return privilegeUpdates.get(authzObj);
     }
-    return null;
+    privilegeUpdates.put(authzObj, privUpdate);
+    return privUpdate;
   }
   public RoleUpdate addRoleUpdate(String group) {
-    if (!hasFullImage) {
-      RoleUpdate roleUpdate = new RoleUpdate(group);
-      roleUpdates.add(roleUpdate);
-      return roleUpdate;
+    RoleUpdate roleUpdate = new RoleUpdate(group);
+    if (roleUpdates.containsKey(group)) {
+      return roleUpdates.get(group);
     }
-    return null;
+    roleUpdates.put(group, roleUpdate);
+    return roleUpdate;
   }
-  public List<RoleUpdate> getRoleUpdates() {
-    return roleUpdates;
+  public Collection<RoleUpdate> getRoleUpdates() {
+    return roleUpdates.values();
   }
-  public List<PrivilegeUpdate> getPrivilegeUpdates() {
-    return privilegeUpdates;
+  public Collection<PrivilegeUpdate> getPrivilegeUpdates() {
+    return privilegeUpdates.values();
   }
 
   @SuppressWarnings({ "rawtypes", "unchecked" })
@@ -132,7 +187,7 @@ public class AuthzUpdate implements UpdateForwarder.Update {
     retMap.put("seqNum", update.seqNum);
     retMap.put("hasFullImage", update.hasFullImage);
     List jsonPrivilegeUpdates = new LinkedList();
-    for (PrivilegeUpdate privilegeUpdate : update.privilegeUpdates) {
+    for (PrivilegeUpdate privilegeUpdate : update.getPrivilegeUpdates()) {
       Map ruMap = new HashMap();
       ruMap.put("authzObj", privilegeUpdate.authzObj);
       ruMap.put("addPrivileges", privilegeUpdate.getAddPrivileges());
@@ -141,7 +196,7 @@ public class AuthzUpdate implements UpdateForwarder.Update {
     }
     retMap.put("privilegeUpdates", jsonPrivilegeUpdates);
     List jsonRoleUpdates = new LinkedList();
-    for (RoleUpdate roleUpdate : update.roleUpdates) {
+    for (RoleUpdate roleUpdate : update.getRoleUpdates()) {
       Map ruMap = new HashMap();
       ruMap.put("group", roleUpdate.group);
       ruMap.put("addRoles", roleUpdate.getAddRoles());

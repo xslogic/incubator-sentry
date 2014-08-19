@@ -343,7 +343,7 @@ public class HMSPathCache extends UpdateForwarder<HMSUpdate>{
   }
 
   @Override
-  protected HMSUpdate retrieveFullImageFromSourceAndApply(int seqNum) {
+  protected HMSUpdate retrieveFullImageFromSourceAndApply(long seqNum) {
     synchronized (rootPath) {
       authzObjToPath.invalidateAll();
       rootPath.children.clear();
@@ -403,7 +403,7 @@ public class HMSPathCache extends UpdateForwarder<HMSUpdate>{
   }
 
   @Override
-  protected HMSUpdate createFullImageUpdate(int seqNum) {
+  protected HMSUpdate createFullImageUpdate(long seqNum) {
     HMSUpdate fullImage = new HMSUpdate(seqNum, serializeAllPaths());
     return fullImage;
   }
